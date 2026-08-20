@@ -12,8 +12,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ============================================================
 # Environment variables (set these in Render -> Environment)
-# BOT_TOKEN = Telegram bot token
-# CHAT_ID   = Telegram chat/channel ID for auto alerts
+# BOT_TOKEN = 8600613901:AAFfH9TJWQxKx_md3iflKE0MN2xQXrQpZbg
+# CHAT_ID   = 6532633465
 #
 # IMPORTANT: No paid market-data API key is required.
 # Market data is fetched from Yahoo Finance's public chart endpoint.

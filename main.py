@@ -4,7 +4,6 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-import pandas_ta as ta
 import requests
 from flask import Flask
 from telegram import Update
@@ -12,13 +11,13 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ============================================================
 # Environment variables (set these in Render -> Environment)
-# BOT_TOKEN = Telegram bot token
-# CHAT_ID   = Telegram chat/channel ID for auto alerts
+# BOT_TOKEN = 8600613901:AAFfH9TJWQxKx_md3iflKE0MN2xQXrQpZbg
+# CHAT_ID   = 6532633465
 #
 # IMPORTANT: No paid market-data API key is required.
 # Market data is fetched from Yahoo Finance's public chart endpoint.
 # ============================================================
-BOT_TOKEN = "8600613901:AAGgXmUoysPhU3DMgRDe7HziP4Sdn3GytDg"
+BOT_TOKEN = "8600613901:AAFfH9TJWQxKx_md3iflKE0MN2xQXrQpZbg"
 CHAT_ID = "6532633465"
 
 # Yahoo Finance gold futures symbol (USD/oz)
@@ -194,52 +193,64 @@ def get_gold_data():
     return h1, h4
 
 
-def get_live_quote():
-    """Get the current FMP gold quote for the displayed entry price."""
-    url = "https://financialmodelingprep.com/stable/quote"
-    data = fmp_request(url, {"symbol": SYMBOL})
-
-    if not isinstance(data, list) or not data:
-        raise RuntimeError("No live gold quote returned by FMP")
-
-    quote = data[0]
-    price = pd.to_numeric(quote.get("price"), errors="coerce")
-    if pd.isna(price) or float(price) <= 0:
-        raise RuntimeError("FMP returned an invalid gold price")
-
-    return float(price), quote
-
 
 # ------------------------------------------------------------
 # Technical analysis
 # ------------------------------------------------------------
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate EMA/RSI/ATR/MACD/ADX using pandas only (no paid API/library)."""
     df = df.copy()
-    df["ema20"] = ta.ema(df["close"], length=20)
-    df["ema50"] = ta.ema(df["close"], length=50)
-    df["ema200"] = ta.ema(df["close"], length=200)
-    df["rsi"] = ta.rsi(df["close"], length=14)
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
 
-    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    if macd is not None and not macd.empty:
-        df["macd"] = macd.iloc[:, 0]
-        df["macd_signal"] = macd.iloc[:, 2]
-        df["macd_hist"] = macd.iloc[:, 1]
-    else:
-        df["macd"] = pd.NA
-        df["macd_signal"] = pd.NA
-        df["macd_hist"] = pd.NA
+    # EMAs
+    df["ema20"] = close.ewm(span=20, adjust=False, min_periods=20).mean()
+    df["ema50"] = close.ewm(span=50, adjust=False, min_periods=50).mean()
+    df["ema200"] = close.ewm(span=200, adjust=False, min_periods=200).mean()
 
-    adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-    if adx is not None and not adx.empty:
-        df["adx"] = adx.iloc[:, 0]
-        df["dmp"] = adx.iloc[:, 1]
-        df["dmn"] = adx.iloc[:, 2]
-    else:
-        df["adx"] = pd.NA
-        df["dmp"] = pd.NA
-        df["dmn"] = pd.NA
+    # RSI(14) using Wilder-style exponential smoothing.
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    df["rsi"] = 100 - (100 / (1 + rs))
+    df.loc[(avg_loss == 0) & (avg_gain > 0), "rsi"] = 100.0
+    df.loc[(avg_gain == 0) & (avg_loss > 0), "rsi"] = 0.0
+
+    # ATR(14)
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    df["atr"] = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+
+    # MACD(12,26,9)
+    ema12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
+    ema26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
+    df["macd"] = ema12 - ema26
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False, min_periods=9).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    # ADX(14) with Wilder-style smoothing.
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(0.0, index=df.index)
+    minus_dm = pd.Series(0.0, index=df.index)
+    plus_dm[up_move > down_move] = up_move[up_move > down_move].clip(lower=0)
+    minus_dm[down_move > up_move] = down_move[down_move > up_move].clip(lower=0)
+
+    atr_safe = df["atr"].replace(0, pd.NA)
+    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / atr_safe
+    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean() / atr_safe
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)
+    df["dmp"] = plus_di
+    df["dmn"] = minus_di
+    df["adx"] = dx.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
 
     return df
 

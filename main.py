@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import requests
 from flask import Flask
+from waitress import serve
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -43,7 +44,8 @@ def home():
 
 def run_flask():
     port = int(os.getenv("PORT", "8080"))
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
+    # Use Waitress instead of Flask's development server on Render.
+    serve(app, host="0.0.0.0", port=port)
 
 
 def keep_alive():
@@ -122,7 +124,7 @@ def _download_gold_1h(days: int) -> pd.DataFrame:
     chart = _yahoo_chart(SYMBOL, "1h", "30d")
     df = _chart_to_ohlc(chart)
 
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=int(days))
     df = df[df["timestamp"] >= cutoff].reset_index(drop=True)
 
     if len(df) < 80:

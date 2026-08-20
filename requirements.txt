@@ -1,6 +1,5 @@
-python-telegram-bot[job-queue]==20.7
-pandas
-pandas-ta
-flask
-gunicorn
-requests
+python-telegram-bot[job-queue]==22.8
+pandas>=2.2,<3
+flask>=3.0,<4
+requests>=2.31,<3
+gunicorn>=23,<24

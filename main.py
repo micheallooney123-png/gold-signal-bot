@@ -12,16 +12,17 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ============================================================
 # Environment variables (set these in Render -> Environment)
-# BOT_TOKEN       = 8600613901:AAGgXmUoysPhU3DMgRDe7HziP4Sdn3GytDg
-# CHAT_ID         = 6532633465
-# FMP_API_KEY     = BZl2dOyMIRgrPAczNCp0HwxJH6kq8dMt
+# BOT_TOKEN = Telegram bot token
+# CHAT_ID   = Telegram chat/channel ID for auto alerts
+#
+# IMPORTANT: No paid market-data API key is required.
+# Market data is fetched from Yahoo Finance's public chart endpoint.
 # ============================================================
 BOT_TOKEN = "8600613901:AAGgXmUoysPhU3DMgRDe7HziP4Sdn3GytDg"
 CHAT_ID = "6532633465"
-FMP_API_KEY = "BZl2dOyMIRgrPAczNCp0HwxJH6kq8dMt"
 
-# FMP gold commodity symbol. This is gold quoted in USD.
-SYMBOL = "GCUSD"
+# Yahoo Finance gold futures symbol (USD/oz)
+SYMBOL = "GC=F"
 TIMEFRAME = "1hour"
 HIGHER_TIMEFRAME = "4hour"
 
@@ -52,74 +53,131 @@ def keep_alive():
 
 
 # ------------------------------------------------------------
-# HTTP helpers
+# Free market-data helpers (Yahoo Finance public chart endpoint)
 # ------------------------------------------------------------
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "GoldSignalBot/2.0",
+    "User-Agent": "Mozilla/5.0 (GoldSignalBot/3.0)",
     "Accept": "application/json",
 })
 
 
-def fmp_request(endpoint: str, params: dict):
-    if not FMP_API_KEY:
-        raise RuntimeError("FMP_API_KEY is not configured in Render Environment")
-
-    request_params = dict(params)
-    request_params["apikey"] = FMP_API_KEY
-
-    response = SESSION.get(endpoint, params=request_params, timeout=15)
-    response.raise_for_status()
-    data = response.json()
-
-    if isinstance(data, dict) and data.get("Error Message"):
-        raise RuntimeError(data["Error Message"])
-    if isinstance(data, dict) and data.get("status") == "error":
-        raise RuntimeError(data.get("message", "FMP API returned an error"))
-
-    return data
-
-
-def get_ohlc(timeframe: str, days: int) -> pd.DataFrame:
-    """Download OHLC candles from FMP commodity data."""
-    end = datetime.now(timezone.utc).date()
-    start = end - timedelta(days=days)
-
-    url = f"https://financialmodelingprep.com/stable/historical-chart/{timeframe}"
-    data = fmp_request(
+def _yahoo_chart(symbol: str, interval: str, range_: str) -> dict:
+    """Fetch public Yahoo Finance chart data; no API key is required."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    response = SESSION.get(
         url,
-        {
-            "symbol": SYMBOL,
-            "from": start.isoformat(),
-            "to": end.isoformat(),
+        params={
+            "range": range_,
+            "interval": interval,
+            "includePrePost": "true",
+            "events": "div,splits",
         },
+        timeout=20,
     )
+    response.raise_for_status()
 
-    if not isinstance(data, list) or not data:
-        raise RuntimeError(f"No {timeframe} gold candles returned by FMP")
+    payload = response.json()
+    result = payload.get("chart", {}).get("result")
+    error = payload.get("chart", {}).get("error")
 
-    df = pd.DataFrame(data)
-    required = {"date", "open", "high", "low", "close"}
-    if not required.issubset(df.columns):
-        raise RuntimeError(f"FMP response is missing OHLC fields: {sorted(required - set(df.columns))}")
+    if error:
+        raise RuntimeError(
+            f"Yahoo Finance error: {error.get('description') or error.get('code')}"
+        )
+    if not result:
+        raise RuntimeError("Yahoo Finance returned no chart data")
 
-    df = df.rename(columns={"date": "timestamp"})
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    return result[0]
+
+
+def _chart_to_ohlc(chart: dict) -> pd.DataFrame:
+    """Convert Yahoo chart JSON to our standard OHLC DataFrame."""
+    timestamps = chart.get("timestamp") or []
+    quote = ((chart.get("indicators") or {}).get("quote") or [{}])[0]
+
+    if not timestamps or not quote:
+        raise RuntimeError("Yahoo Finance returned empty OHLC data")
+
+    df = pd.DataFrame({
+        "timestamp": pd.to_datetime(timestamps, unit="s", utc=True),
+        "open": quote.get("open"),
+        "high": quote.get("high"),
+        "low": quote.get("low"),
+        "close": quote.get("close"),
+    })
+
     for col in ["open", "high", "low", "close"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = (
+    return (
         df.dropna(subset=["timestamp", "open", "high", "low", "close"])
         .sort_values("timestamp")
         .drop_duplicates("timestamp")
         .reset_index(drop=True)
     )
 
+
+def _download_gold_1h(days: int) -> pd.DataFrame:
+    """Download free 1-hour gold futures data from Yahoo Finance."""
+    chart = _yahoo_chart(SYMBOL, "1h", "30d")
+    df = _chart_to_ohlc(chart)
+
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+    df = df[df["timestamp"] >= cutoff].reset_index(drop=True)
+
     if len(df) < 80:
-        raise RuntimeError(f"Not enough {timeframe} candles: {len(df)}")
+        raise RuntimeError(f"Not enough Yahoo Finance 1H gold candles: {len(df)}")
 
     return df
 
+
+def get_ohlc(timeframe: str, days: int) -> pd.DataFrame:
+    """Get gold OHLC candles from Yahoo Finance without a paid API."""
+    h1 = _download_gold_1h(days)
+
+    if timeframe == "1hour":
+        return h1
+
+    if timeframe == "4hour":
+        x = h1.set_index("timestamp")[["open", "high", "low", "close"]]
+        h4 = x.resample("4h", label="right", closed="right").agg({
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+        }).dropna().reset_index()
+
+        if len(h4) < 80:
+            raise RuntimeError(f"Not enough Yahoo Finance 4H gold candles: {len(h4)}")
+        return h4
+
+    raise ValueError(f"Unsupported timeframe: {timeframe}")
+
+
+def get_live_quote():
+    """Get the latest free gold price from Yahoo Finance."""
+    chart = _yahoo_chart(SYMBOL, "5m", "5d")
+    df = _chart_to_ohlc(chart)
+
+    if df.empty:
+        raise RuntimeError("Yahoo Finance returned no live gold quote")
+
+    price = float(df.iloc[-1]["close"])
+    if price <= 0:
+        raise RuntimeError("Yahoo Finance returned an invalid gold price")
+
+    meta = chart.get("meta") or {}
+    previous_close = pd.to_numeric(meta.get("previousClose"), errors="coerce")
+    if pd.isna(previous_close) or float(previous_close) <= 0:
+        change_pct = None
+    else:
+        change_pct = (price - float(previous_close)) / float(previous_close) * 100
+
+    return price, {
+        "price": price,
+        "changesPercentage": change_pct,
+    }
 
 def get_gold_data():
     """Get 1H and 4H gold data for multi-timeframe confirmation."""
@@ -329,7 +387,7 @@ def analyze_signal(h1: pd.DataFrame, h4: pd.DataFrame, live_price: float):
         "higher_trend": higher_trend,
         "reason": " | ".join(reasons),
         "candle_time": last["timestamp"],
-        "data_source": "Financial Modeling Prep (GCUSD)",
+        "data_source": "Yahoo Finance (GC=F)",
     }
 
 
@@ -402,7 +460,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 RSI: {last['rsi']:.1f}\n"
             f"📈 الاتجاه 1H: {trend}\n"
             f"📉 التغير: {change_text}\n"
-            f"📡 المصدر: Financial Modeling Prep (GCUSD)"
+            f"📡 المصدر: Yahoo Finance (GC=F)"
         )
     except Exception as exc:
         logger.exception("Status command failed")
@@ -438,7 +496,7 @@ async def auto_signals(context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 طريقة العمل:\n\n"
-        "• بيانات الذهب من FMP عبر رمز GCUSD.\n"
+        "• بيانات الذهب من Yahoo Finance عبر رمز GC=F.\n"
         "• التحليل يستخدم 1H + 4H.\n"
         "• EMA20/50/200 + RSI + MACD + ATR + ADX.\n"
         "• لا يتم إرسال BUY/SELL إذا لم تتفق الشروط.\n"
@@ -475,8 +533,6 @@ def validate_environment():
         missing.append("BOT_TOKEN")
     if not CHAT_ID:
         missing.append("CHAT_ID")
-    if not FMP_API_KEY:
-        missing.append("FMP_API_KEY")
     if missing:
         raise RuntimeError("Missing Render environment variables: " + ", ".join(missing))
 
@@ -498,7 +554,7 @@ def main():
     application.job_queue.run_once(auto_signals, 5, name="gold_startup_signal")
 
     print("🤖 Gold Signal Bot started successfully")
-    print("📡 Data source: Financial Modeling Prep / GCUSD")
+    print("📡 Data source: Yahoo Finance / GC=F (free)")
     application.run_polling()
 
 

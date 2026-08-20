@@ -12,9 +12,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ============================================================
 # Environment variables (set these in Render -> Environment)
-# BOT_TOKEN       = "8600613901:AAG3Kvdlgy1yM0pU_GgAIis2Qb-B9g-GwTo"
-# CHAT_ID         = "6532633465"
-# FMP_API_KEY     = "BZl2dOyMIRgrPAczNCp0HwxJH6kq8dMt"
+# BOT_TOKEN       = 8600613901:AAG3Kvdlgy1yM0pU_GgAIis2Qb-B9g-GwTo
+# CHAT_ID         = 6532633465
+# FMP_API_KEY     = BZl2dOyMIRgrPAczNCp0HwxJH6kq8dMt
 # ============================================================
 BOT_TOKEN = "8600613901:AAG3Kvdlgy1yM0pU_GgAIis2Qb-B9g-GwTo"
 CHAT_ID = "6532633465"

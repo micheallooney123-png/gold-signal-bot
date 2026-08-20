@@ -3,3 +3,4 @@ pandas>=2.2,<3
 flask>=3.0,<4
 requests>=2.31,<3
 gunicorn>=23,<24
+waitress>=3.0,<4

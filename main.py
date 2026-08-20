@@ -15,8 +15,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # إعدادات البوت
 # ============================================================
 
-TOKEN = 8600613901:AAG3Kvdlgy1yM0pU_GgAIis2Qb-B9g-GwTo
-CHAT_ID = 6532633465
+TOKEN = "8600613901:AAEDMvZpCbtNvgwy5qg_MIOwL2BUb6_lQFg"
+CHAT_ID = "6532633465"
 
 SYMBOL = "XAUUSD=X"
 INTERVAL = "1h"

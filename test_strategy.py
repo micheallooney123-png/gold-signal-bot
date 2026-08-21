@@ -7,9 +7,9 @@ from strategy import generate_signal
 
 def _make_settings() -> Settings:
     return Settings(
-        telegram_bot_token="dummy",
-        telegram_chat_id="dummy",
-        price_api_key="dummy",
+        telegram_bot_token="8600613901:AAFfH9TJWQxKx_md3iflKE0MN2xQXrQpZbg",
+        telegram_chat_id="6532633465",
+        price_api_key="2838f2df996b40bfa48161a952be3942",
         symbol="XAU/USD",
         timeframe="M15",
         poll_seconds=60,
